@@ -87,6 +87,19 @@ Add-Type -AssemblyName WindowsBase
             </Setter>
         </Style>
 
+        <!--
+            FIX: o estilo original usava Trigger.EnterActions/ExitActions com Storyboard
+            (Storyboard.TargetName="bg"/"scaleT") para animar o hover. O
+            System.Windows.Markup.XamlReader.Load usado a partir do PowerShell (XAML
+            "solto", sem compilacao/BAML) nao resolve esse tipo de EnterActions/ExitActions
+            de forma confiavel e derruba o parser inteiro com:
+                "Nao e possivel definir o associado desconhecido 'System.Windows.Trigger.EnterActions'."
+            Isso fazia $window ficar $null e todos os erros em cascata (FindName nulo,
+            Visibility, Add_Click, etc.) apareciam depois.
+            SOLUCAO: trocar as animacoes por Setters simples (sem Storyboard). O efeito
+            visual de hover (leve destaque + glow) e mantido, so deixa de ser animado
+            suavemente - continua parecendo bom e agora carrega sem erro.
+        -->
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource PurpleGradient}"/>
             <Setter Property="Foreground" Value="White"/>
@@ -98,32 +111,10 @@ Add-Type -AssemblyName WindowsBase
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="8" RenderTransformOrigin="0.5,0.5">
-                            <Border.RenderTransform>
-                                <ScaleTransform x:Name="scaleT" ScaleX="1" ScaleY="1"/>
-                            </Border.RenderTransform>
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
+                        <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="8"/>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="Opacity" To="0.88" Duration="0:0:0.12"/>
-                                            <DoubleAnimation Storyboard.TargetName="scaleT" Storyboard.TargetProperty="ScaleX" To="1.02" Duration="0:0:0.12"/>
-                                            <DoubleAnimation Storyboard.TargetName="scaleT" Storyboard.TargetProperty="ScaleY" To="1.02" Duration="0:0:0.12"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.15"/>
-                                            <DoubleAnimation Storyboard.TargetName="scaleT" Storyboard.TargetProperty="ScaleX" To="1" Duration="0:0:0.15"/>
-                                            <DoubleAnimation Storyboard.TargetName="scaleT" Storyboard.TargetProperty="ScaleY" To="1" Duration="0:0:0.15"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
+                                <Setter TargetName="bg" Property="Opacity" Value="0.88"/>
                                 <Setter TargetName="bg" Property="Effect" Value="{StaticResource ButtonGlow}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
@@ -154,7 +145,7 @@ Add-Type -AssemblyName WindowsBase
             </Setter>
         </Style>
 
-        <!-- Botoes de navegacao no estilo "pill", com destaque animado -->
+        <!-- Botoes de navegacao no estilo "pill", com destaque no hover (sem Storyboard, ver nota acima) -->
         <Style x:Key="NavItem" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
             <Setter Property="FontSize" Value="12"/>
@@ -189,20 +180,7 @@ Add-Type -AssemblyName WindowsBase
                                     <Condition Property="IsMouseOver" Value="True"/>
                                     <Condition Property="IsChecked" Value="False"/>
                                 </MultiTrigger.Conditions>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <ColorAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#1C1C22" Duration="0:0:0.15"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <ColorAnimation Storyboard.TargetName="bg" Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)" To="#00000000" Duration="0:0:0.15"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
+                                <Setter TargetName="bg" Property="Background" Value="{StaticResource CardHover}"/>
                             </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
