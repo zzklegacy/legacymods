@@ -32,26 +32,28 @@ Add-Type -AssemblyName WindowsBase
 
     <Window.Resources>
 
-        <SolidColorBrush x:Key="Purple" Color="#9B5DE5"/>
-        <SolidColorBrush x:Key="PurpleSoft" Color="#2A1F3D"/>
-        <SolidColorBrush x:Key="Sidebar" Color="#111114"/>
-        <SolidColorBrush x:Key="Card" Color="#17171B"/>
-        <SolidColorBrush x:Key="CardHover" Color="#1C1C22"/>
-        <SolidColorBrush x:Key="Border0" Color="#2A2A30"/>
-        <SolidColorBrush x:Key="TextMuted" Color="#8A8A93"/>
+        <SolidColorBrush x:Key="Purple" Color="#8B6CF2"/>
+        <SolidColorBrush x:Key="PurpleSoft" Color="#211C33"/>
+        <SolidColorBrush x:Key="Sidebar" Color="#0D0D10"/>
+        <SolidColorBrush x:Key="Card" Color="#131316"/>
+        <SolidColorBrush x:Key="CardHover" Color="#18181C"/>
+        <SolidColorBrush x:Key="Border0" Color="#232328"/>
+        <SolidColorBrush x:Key="TextMuted" Color="#87878F"/>
         <SolidColorBrush x:Key="Console" Color="#0E0E10"/>
         <SolidColorBrush x:Key="ConsoleText" Color="#C9C9D1"/>
-        <SolidColorBrush x:Key="Warning" Color="#E5A339"/>
-        <SolidColorBrush x:Key="WarningSoft" Color="#3A2E17"/>
-        <SolidColorBrush x:Key="Online" Color="#3DDC84"/>
+        <SolidColorBrush x:Key="Warning" Color="#D9A54B"/>
+        <SolidColorBrush x:Key="WarningSoft" Color="#2A2419"/>
+        <SolidColorBrush x:Key="Online" Color="#4ADE80"/>
 
         <LinearGradientBrush x:Key="PurpleGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#B07BF0" Offset="0"/>
-            <GradientStop Color="#8340D6" Offset="1"/>
+            <GradientStop Color="#9C7CF5" Offset="0"/>
+            <GradientStop Color="#7A57DE" Offset="1"/>
         </LinearGradientBrush>
 
-        <DropShadowEffect x:Key="CardShadow" BlurRadius="18" ShadowDepth="3" Direction="270" Opacity="0.35" Color="#000000"/>
-        <DropShadowEffect x:Key="ButtonGlow" BlurRadius="14" ShadowDepth="0" Opacity="0.45" Color="#9B5DE5"/>
+        <!-- Sombras discretas: um painel "clean" nao deve ter glow chamativo nem
+             sombras profundas - apenas separacao sutil entre camadas. -->
+        <DropShadowEffect x:Key="CardShadow" BlurRadius="16" ShadowDepth="1" Direction="270" Opacity="0.18" Color="#000000"/>
+        <DropShadowEffect x:Key="ButtonGlow" BlurRadius="10" ShadowDepth="0" Opacity="0.25" Color="#8B6CF2"/>
 
         <Style x:Key="ScrollThumbStyle" TargetType="Thumb">
             <Setter Property="Template">
@@ -108,14 +110,16 @@ Add-Type -AssemblyName WindowsBase
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="14,10"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="8"/>
+                        <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="10">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg" Property="Opacity" Value="0.88"/>
-                                <Setter TargetName="bg" Property="Effect" Value="{StaticResource ButtonGlow}"/>
+                                <Setter TargetName="bg" Property="Opacity" Value="0.92"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="bg" Property="Opacity" Value="0.35"/>
@@ -131,7 +135,7 @@ Add-Type -AssemblyName WindowsBase
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" Background="{StaticResource Card}" BorderBrush="{StaticResource Border0}" BorderThickness="1" CornerRadius="8">
+                        <Border x:Name="bg" Background="{StaticResource Card}" BorderBrush="{StaticResource Border0}" BorderThickness="1" CornerRadius="10">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -148,28 +152,28 @@ Add-Type -AssemblyName WindowsBase
         <!-- Botoes de navegacao no estilo "pill", com destaque no hover (sem Storyboard, ver nota acima) -->
         <Style x:Key="NavItem" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
-            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontSize" Value="12.5"/>
             <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Height" Value="40"/>
-            <Setter Property="Margin" Value="12,3,12,3"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Margin" Value="14,1,14,1"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="bg" Background="#00000000" CornerRadius="10" Padding="12,0">
+                        <Border x:Name="bg" Background="#00000000" CornerRadius="9" Padding="14,0">
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="3"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <Ellipse x:Name="dot" Grid.Column="0" Width="7" Height="7" Fill="{StaticResource Purple}" Opacity="0" HorizontalAlignment="Left" VerticalAlignment="Center"/>
-                                <TextBlock Grid.Column="1" Text="{TemplateBinding Content}" VerticalAlignment="Center" Margin="8,0,0,0"
-                                           FontFamily="Consolas" Foreground="{TemplateBinding Foreground}" FontSize="{TemplateBinding FontSize}"/>
+                                <Border x:Name="bar" Grid.Column="0" Width="3" CornerRadius="2" Background="{StaticResource Purple}" Opacity="0" HorizontalAlignment="Left" VerticalAlignment="Stretch" Margin="-14,7,0,7"/>
+                                <TextBlock Grid.Column="1" Text="{TemplateBinding Content}" VerticalAlignment="Center" Margin="12,0,0,0"
+                                           FontWeight="Medium" Foreground="{TemplateBinding Foreground}" FontSize="{TemplateBinding FontSize}"/>
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="bg" Property="Background" Value="{StaticResource PurpleSoft}"/>
-                                <Setter TargetName="dot" Property="Opacity" Value="1"/>
+                                <Setter TargetName="bar" Property="Opacity" Value="1"/>
                                 <Setter Property="Foreground" Value="White"/>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -189,11 +193,10 @@ Add-Type -AssemblyName WindowsBase
         </Style>
 
         <Style x:Key="NavSection" TargetType="TextBlock">
-            <Setter Property="FontFamily" Value="Consolas"/>
-            <Setter Property="FontSize" Value="9"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="#55555E"/>
-            <Setter Property="Margin" Value="24,16,0,6"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#4E4E56"/>
+            <Setter Property="Margin" Value="26,18,0,6"/>
         </Style>
 
         <Style x:Key="ModernCheck" TargetType="CheckBox">
