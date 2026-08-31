@@ -28,7 +28,7 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-$ApiBaseUrl = "zezekaaaaaaaaa-production.up.railway.app"   # << troque aqui
+$ApiBaseUrl = "https://zezekaaaaaaaaa-production.up.railway.app"
 
 function Get-PublicIP {
     try {
