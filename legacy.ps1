@@ -1,10 +1,17 @@
 #Requires -Version 5.1
 <#
-    LegacyMods v4.0
+    LegacyMods v4.0 (corrigido)
     Painel de otimizacao, limpeza, privacidade, desempenho em jogos e instalacao de apps para Windows.
 
     Uso local:  powershell -ExecutionPolicy Bypass -File .\LegacyMods.ps1
     Uso remoto: irm https://SEU-LINK/LegacyMods.ps1 | iex
+
+    CORRECAO APLICADA (ver comentario mais abaixo, proximo a "$script:statusTimer"):
+    o timer de status era criado DEPOIS da primeira chamada a Show-Page, o que
+    causava "Nao e possivel chamar um metodo em uma expressao de valor nulo"
+    na primeira execucao "limpa" do script (sem estado residual na sessao do
+    PowerShell). A criacao do timer foi movida para antes da navegacao inicial,
+    e a funcao Show-Page tambem ganhou uma checagem de nulo defensiva.
 #>
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -50,8 +57,6 @@ Add-Type -AssemblyName WindowsBase
             <GradientStop Color="#7A57DE" Offset="1"/>
         </LinearGradientBrush>
 
-        <!-- Sombras discretas: um painel "clean" nao deve ter glow chamativo nem
-             sombras profundas - apenas separacao sutil entre camadas. -->
         <DropShadowEffect x:Key="CardShadow" BlurRadius="16" ShadowDepth="1" Direction="270" Opacity="0.18" Color="#000000"/>
         <DropShadowEffect x:Key="ButtonGlow" BlurRadius="10" ShadowDepth="0" Opacity="0.25" Color="#8B6CF2"/>
 
@@ -89,19 +94,6 @@ Add-Type -AssemblyName WindowsBase
             </Setter>
         </Style>
 
-        <!--
-            FIX: o estilo original usava Trigger.EnterActions/ExitActions com Storyboard
-            (Storyboard.TargetName="bg"/"scaleT") para animar o hover. O
-            System.Windows.Markup.XamlReader.Load usado a partir do PowerShell (XAML
-            "solto", sem compilacao/BAML) nao resolve esse tipo de EnterActions/ExitActions
-            de forma confiavel e derruba o parser inteiro com:
-                "Nao e possivel definir o associado desconhecido 'System.Windows.Trigger.EnterActions'."
-            Isso fazia $window ficar $null e todos os erros em cascata (FindName nulo,
-            Visibility, Add_Click, etc.) apareciam depois.
-            SOLUCAO: trocar as animacoes por Setters simples (sem Storyboard). O efeito
-            visual de hover (leve destaque + glow) e mantido, so deixa de ser animado
-            suavemente - continua parecendo bom e agora carrega sem erro.
-        -->
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource PurpleGradient}"/>
             <Setter Property="Foreground" Value="White"/>
@@ -149,7 +141,6 @@ Add-Type -AssemblyName WindowsBase
             </Setter>
         </Style>
 
-        <!-- Botoes de navegacao no estilo "pill", com destaque no hover (sem Storyboard, ver nota acima) -->
         <Style x:Key="NavItem" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
             <Setter Property="FontSize" Value="12.5"/>
@@ -1216,6 +1207,98 @@ $xaml.SelectNodes("//*[@Name]") | ForEach-Object {
 }
 
 # ---------------------------------------------------------------------------
+# Metricas de sistema (aba Status)
+# ---------------------------------------------------------------------------
+# CORRECAO: esta secao foi MOVIDA para cima, antes da navegacao (Show-Page),
+# porque $script:statusTimer precisa existir ANTES de Show-Page ser chamado
+# pela primeira vez (ver comentario detalhado logo abaixo de sua criacao).
+$cachedCpuName = $null
+$cachedGpuName = $null
+
+function Get-CpuPercent {
+    try { [math]::Round((Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime, 0) }
+    catch { $null }
+}
+function Get-RamStats {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $totalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+        $freeGB  = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+        $usedGB  = [math]::Round($totalGB - $freeGB, 1)
+        $pct     = if ($totalGB -gt 0) { [math]::Round(($usedGB / $totalGB) * 100, 0) } else { 0 }
+        [PSCustomObject]@{ Total = $totalGB; Used = $usedGB; Percent = $pct }
+    } catch { $null }
+}
+function Get-DiskStats {
+    try {
+        $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+        $totalGB = [math]::Round($d.Size / 1GB, 1)
+        $freeGB  = [math]::Round($d.FreeSpace / 1GB, 1)
+        $usedGB  = [math]::Round($totalGB - $freeGB, 1)
+        $pct     = if ($totalGB -gt 0) { [math]::Round(($usedGB / $totalGB) * 100, 0) } else { 0 }
+        [PSCustomObject]@{ Total = $totalGB; Used = $usedGB; Percent = $pct }
+    } catch { $null }
+}
+function Get-GpuPercent {
+    try {
+        $samples = (Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction Stop).CounterSamples
+        $sum = ($samples | Group-Object InstanceName | ForEach-Object { ($_.Group | Measure-Object -Property CookedValue -Maximum).Maximum } | Measure-Object -Sum).Sum
+        [math]::Round([math]::Min([double]$sum, 100), 0)
+    } catch { $null }
+}
+function Get-UptimeText {
+    try {
+        $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        $span = (Get-Date) - $boot
+        "{0}d {1}h {2}min" -f $span.Days, $span.Hours, $span.Minutes
+    } catch { "--" }
+}
+
+function Update-StatusMetrics {
+    if (-not $cachedCpuName) {
+        try { $cachedCpuName = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name } catch { $cachedCpuName = "CPU nao identificada" }
+    }
+    if (-not $cachedGpuName) {
+        try { $cachedGpuName = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name } catch { $cachedGpuName = "GPU nao identificada" }
+    }
+
+    $cpu = Get-CpuPercent
+    if ($null -ne $cpu) { $ctrl.barCpu.Value = $cpu; $ctrl.txtCpuPercent.Text = "$cpu%" } else { $ctrl.txtCpuPercent.Text = "N/D" }
+    $ctrl.txtCpuName.Text = $cachedCpuName
+
+    $ram = Get-RamStats
+    if ($ram) {
+        $ctrl.barRam.Value = $ram.Percent
+        $ctrl.txtRamPercent.Text = "$($ram.Percent)%"
+        $ctrl.txtRamDetail.Text = "$($ram.Used) GB / $($ram.Total) GB"
+    }
+
+    $disk = Get-DiskStats
+    if ($disk) {
+        $ctrl.barDisk.Value = $disk.Percent
+        $ctrl.txtDiskPercent.Text = "$($disk.Percent)%"
+        $ctrl.txtDiskDetail.Text = "$($disk.Used) GB / $($disk.Total) GB"
+    }
+
+    $gpu = Get-GpuPercent
+    if ($null -ne $gpu) { $ctrl.barGpu.Value = $gpu; $ctrl.txtGpuPercent.Text = "$gpu%" } else { $ctrl.txtGpuPercent.Text = "N/D" }
+    $ctrl.txtGpuName.Text = $cachedGpuName
+
+    $ctrl.txtUptime.Text = Get-UptimeText
+}
+
+# --- CORRECAO PRINCIPAL DO BUG ---
+# Antes, esta criacao do timer estava la embaixo (na secao original "Metricas
+# de sistema"), DEPOIS da chamada "Show-Page 'navInicio'". Como Show-Page usa
+# $script:statusTimer.Start()/Stop(), a primeira chamada (disparada logo
+# abaixo) tentava usar uma variavel que ainda nao existia -> $null -> erro
+# "Nao e possivel chamar um metodo em uma expressao de valor nulo".
+# Agora o timer e criado aqui, ANTES de qualquer chamada a Show-Page.
+$script:statusTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:statusTimer.Interval = [TimeSpan]::FromSeconds(2)
+$script:statusTimer.Add_Tick({ Update-StatusMetrics })
+
+# ---------------------------------------------------------------------------
 # Navegacao entre paginas (com fade-in animado)
 # ---------------------------------------------------------------------------
 $pages = @{
@@ -1245,7 +1328,11 @@ function Show-Page($navKey) {
         }
     }
     $ctrl.footerBar.Visibility = if ($navKey -in @('navInstalar','navOtimizacao','navLimpeza','navPrivacidade','navAvancado')) { 'Visible' } else { 'Collapsed' }
-    if ($navKey -eq 'navStatus') { $script:statusTimer.Start() } else { $script:statusTimer.Stop() }
+    # Checagem de nulo defensiva: mesmo com a criacao movida para cima, mantemos
+    # esta protecao para o caso de o codigo ser reorganizado de novo no futuro.
+    if ($script:statusTimer) {
+        if ($navKey -eq 'navStatus') { $script:statusTimer.Start() } else { $script:statusTimer.Stop() }
+    }
 }
 
 foreach ($navKey in $pages.Keys) {
@@ -1261,10 +1348,6 @@ foreach ($navKey in $pages.Keys) {
 Show-Page 'navInicio'
 
 # Clicar em qualquer parte da linha marca/desmarca o checkbox correspondente.
-# Corrigido: clique no proprio CheckBox nao dispara mais o toggle duplicado
-# (antes, um clique direto na caixinha alternava o valor duas vezes - uma pelo
-# comportamento nativo do CheckBox e outra pelo MouseLeftButtonUp da linha -
-# e o estado parecia nao mudar).
 foreach ($key in ($ctrl.Keys | Where-Object { $_ -like 'chk*' })) {
     $cb = $ctrl[$key]
     $rowBorder = $cb.Parent.Parent
@@ -1457,8 +1540,6 @@ function Disable-NetAdapterPowerSaving {
     } catch {}
 }
 function Optimize-SSDTrim {
-    # So aplica ReTrim em unidades cujo MediaType seja SSD; em HDD o Optimize-Volume
-    # ja faz desfragmentacao por padrao, entao aqui restringimos de fato a SSDs.
     try {
         $ssdLetters = @()
         try {
@@ -1475,8 +1556,6 @@ function Optimize-SSDTrim {
                 Optimize-Volume -DriveLetter $letter -ReTrim -ErrorAction SilentlyContinue
             }
         } else {
-            # Fallback: nao foi possivel identificar SSDs via Get-PhysicalDisk;
-            # deixa o Optimize-Volume decidir a estrategia certa para cada unidade fixa.
             Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter } | ForEach-Object {
                 Optimize-Volume -DriveLetter $_.DriveLetter -ErrorAction SilentlyContinue
             }
@@ -1488,9 +1567,6 @@ function Suspend-WindowsUpdate {
     $expiryTime = (Get-Date).AddDays(7).ToString("yyyy-MM-ddT00:00:00Z")
     $path = "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings"
     New-Item -Path $path -Force -ErrorAction SilentlyContinue | Out-Null
-    # Todas as chaves abaixo sao necessarias; a versao anterior so definia
-    # PauseUpdatesExpiryTime, o que nao e suficiente para o Windows Update
-    # de fato considerar a pausa ativa em versoes atuais do Windows.
     Set-ItemProperty -Path $path -Name "PauseUpdatesStartTime" -Value $startTime -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $path -Name "PauseUpdatesExpiryTime" -Value $expiryTime -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $path -Name "PauseFeatureUpdatesStartTime" -Value $startTime -Force -ErrorAction SilentlyContinue
@@ -1508,10 +1584,6 @@ function Install-WingetApp {
         throw "winget nao encontrado. Instale o 'App Installer' pela Microsoft Store."
     }
     $proc = Start-Process -FilePath "winget" -ArgumentList @("install","--id",$Id,"-e","--silent","--accept-package-agreements","--accept-source-agreements") -Wait -PassThru -WindowStyle Hidden
-    # Codigos de saida que NAO representam falha real de instalacao:
-    #  -1978335189 = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE (ja esta na versao mais recente)
-    #  -1978335135 = APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED (ja instalado)
-    #  -1978334963 = APPINSTALLER_CLI_ERROR_INSTALL_ALREADY_INSTALLED (outra versao ja instalada)
     $okCodes = @(0, -1978335189, -1978335135, -1978334963)
     if ($proc.ExitCode -notin $okCodes) {
         throw "winget retornou codigo $($proc.ExitCode)"
@@ -1699,9 +1771,6 @@ function Disable-PowerThrottling {
     Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" -Name "PowerThrottlingOff" -Value 1 -Force -ErrorAction SilentlyContinue
 }
 function Disable-CoreParking {
-    # Aplica ao esquema de energia ATIVO no momento (scheme_current) e reativa,
-    # em vez de assumir cegamente que "scheme_current" ja e o esquema desejado
-    # antes de qualquer ajuste ter sido feito.
     powercfg -setacvalueindex scheme_current sub_processor CPMINCORES 100 2>$null
     powercfg -setdcvalueindex scheme_current sub_processor CPMINCORES 100 2>$null
     powercfg -setactive scheme_current 2>$null
@@ -1755,6 +1824,37 @@ function Optimize-GameProcess {
         }
     } catch {}
     return $true
+}
+
+# Tweaks de rede/registro/input que dependem de valores calculados na hora (RAM, interfaces etc.)
+function Optimize-Registry {
+    Remove-Item "HKCU:\Software\Classes\MuiCache" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs" -Name "*" -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" -Name "*" -ErrorAction SilentlyContinue
+}
+function Disable-MouseAcceleration {
+    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseSpeed" -Value "0" -Force
+    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseThreshold1" -Value "0" -Force
+    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseThreshold2" -Value "0" -Force
+}
+function Set-GameResponsiveness {
+    $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+    Set-ItemProperty -Path $path -Name "SystemResponsiveness" -Value 0 -Force -ErrorAction SilentlyContinue
+    New-Item -Path "$path\Tasks\Games" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "$path\Tasks\Games" -Name "NetworkThrottlingIndex" -Value 0xFFFFFFFF -Force -ErrorAction SilentlyContinue
+}
+function Disable-NagleAlgorithm {
+    Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" -ErrorAction SilentlyContinue | ForEach-Object {
+        Set-ItemProperty -Path $_.PSPath -Name "TcpAckFrequency" -Value 1 -Force -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path $_.PSPath -Name "TCPNoDelay" -Value 1 -Force -ErrorAction SilentlyContinue
+    }
+}
+function Enable-HAGS {
+    New-Item -Path "HKLM:\SOFTWARE\Microsoft\DirectX\GraphicsSettings" -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\DirectX\GraphicsSettings" -Name "HwSchMode" -Value 2 -Force -ErrorAction SilentlyContinue
+}
+function Set-ForegroundPriority {
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" -Name "Win32PrioritySeparation" -Value 38 -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
@@ -1860,120 +1960,7 @@ $AppMap = [ordered]@{
 }
 foreach ($k in $AppMap.Keys) { $TweakMap[$k] = $AppMap[$k] }
 
-# Tweaks de rede/registro/input que dependem de valores calculados na hora (RAM, interfaces etc.)
-function Optimize-Registry {
-    Remove-Item "HKCU:\Software\Classes\MuiCache" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs" -Name "*" -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" -Name "*" -ErrorAction SilentlyContinue
-}
-function Disable-MouseAcceleration {
-    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseSpeed" -Value "0" -Force
-    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseThreshold1" -Value "0" -Force
-    Set-ItemProperty -Path "HKCU:\Control Panel\Mouse" -Name "MouseThreshold2" -Value "0" -Force
-}
-function Set-GameResponsiveness {
-    $path = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
-    Set-ItemProperty -Path $path -Name "SystemResponsiveness" -Value 0 -Force -ErrorAction SilentlyContinue
-    New-Item -Path "$path\Tasks\Games" -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "$path\Tasks\Games" -Name "NetworkThrottlingIndex" -Value 0xFFFFFFFF -Force -ErrorAction SilentlyContinue
-}
-function Disable-NagleAlgorithm {
-    Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" -ErrorAction SilentlyContinue | ForEach-Object {
-        Set-ItemProperty -Path $_.PSPath -Name "TcpAckFrequency" -Value 1 -Force -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path $_.PSPath -Name "TCPNoDelay" -Value 1 -Force -ErrorAction SilentlyContinue
-    }
-}
-function Enable-HAGS {
-    New-Item -Path "HKLM:\SOFTWARE\Microsoft\DirectX\GraphicsSettings" -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\DirectX\GraphicsSettings" -Name "HwSchMode" -Value 2 -Force -ErrorAction SilentlyContinue
-}
-function Set-ForegroundPriority {
-    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" -Name "Win32PrioritySeparation" -Value 38 -Force -ErrorAction SilentlyContinue
-}
-
-# ---------------------------------------------------------------------------
-# Metricas de sistema (aba Status)
-# ---------------------------------------------------------------------------
-$cachedCpuName = $null
-$cachedGpuName = $null
-
-function Get-CpuPercent {
-    try { [math]::Round((Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime, 0) }
-    catch { $null }
-}
-function Get-RamStats {
-    try {
-        $os = Get-CimInstance Win32_OperatingSystem
-        $totalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
-        $freeGB  = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
-        $usedGB  = [math]::Round($totalGB - $freeGB, 1)
-        $pct     = if ($totalGB -gt 0) { [math]::Round(($usedGB / $totalGB) * 100, 0) } else { 0 }
-        [PSCustomObject]@{ Total = $totalGB; Used = $usedGB; Percent = $pct }
-    } catch { $null }
-}
-function Get-DiskStats {
-    try {
-        $d = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
-        $totalGB = [math]::Round($d.Size / 1GB, 1)
-        $freeGB  = [math]::Round($d.FreeSpace / 1GB, 1)
-        $usedGB  = [math]::Round($totalGB - $freeGB, 1)
-        $pct     = if ($totalGB -gt 0) { [math]::Round(($usedGB / $totalGB) * 100, 0) } else { 0 }
-        [PSCustomObject]@{ Total = $totalGB; Used = $usedGB; Percent = $pct }
-    } catch { $null }
-}
-function Get-GpuPercent {
-    try {
-        $samples = (Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction Stop).CounterSamples
-        # Agrupa por instancia (processo) e usa o maximo de cada motor 3D antes de somar,
-        # evitando somar amostras duplicadas do mesmo processo em multiplos contextos.
-        $sum = ($samples | Group-Object InstanceName | ForEach-Object { ($_.Group | Measure-Object -Property CookedValue -Maximum).Maximum } | Measure-Object -Sum).Sum
-        [math]::Round([math]::Min([double]$sum, 100), 0)
-    } catch { $null }
-}
-function Get-UptimeText {
-    try {
-        $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-        $span = (Get-Date) - $boot
-        "{0}d {1}h {2}min" -f $span.Days, $span.Hours, $span.Minutes
-    } catch { "--" }
-}
-
-function Update-StatusMetrics {
-    if (-not $cachedCpuName) {
-        try { $cachedCpuName = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name } catch { $cachedCpuName = "CPU nao identificada" }
-    }
-    if (-not $cachedGpuName) {
-        try { $cachedGpuName = (Get-CimInstance Win32_VideoController | Select-Object -First 1).Name } catch { $cachedGpuName = "GPU nao identificada" }
-    }
-
-    $cpu = Get-CpuPercent
-    if ($null -ne $cpu) { $ctrl.barCpu.Value = $cpu; $ctrl.txtCpuPercent.Text = "$cpu%" } else { $ctrl.txtCpuPercent.Text = "N/D" }
-    $ctrl.txtCpuName.Text = $cachedCpuName
-
-    $ram = Get-RamStats
-    if ($ram) {
-        $ctrl.barRam.Value = $ram.Percent
-        $ctrl.txtRamPercent.Text = "$($ram.Percent)%"
-        $ctrl.txtRamDetail.Text = "$($ram.Used) GB / $($ram.Total) GB"
-    }
-
-    $disk = Get-DiskStats
-    if ($disk) {
-        $ctrl.barDisk.Value = $disk.Percent
-        $ctrl.txtDiskPercent.Text = "$($disk.Percent)%"
-        $ctrl.txtDiskDetail.Text = "$($disk.Used) GB / $($disk.Total) GB"
-    }
-
-    $gpu = Get-GpuPercent
-    if ($null -ne $gpu) { $ctrl.barGpu.Value = $gpu; $ctrl.txtGpuPercent.Text = "$gpu%" } else { $ctrl.txtGpuPercent.Text = "N/D" }
-    $ctrl.txtGpuName.Text = $cachedGpuName
-
-    $ctrl.txtUptime.Text = Get-UptimeText
-}
-
-$script:statusTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:statusTimer.Interval = [TimeSpan]::FromSeconds(2)
-$script:statusTimer.Add_Tick({ Update-StatusMetrics })
+$script:statusTimer.Add_Tick({ Update-StatusMetrics }) 2>$null | Out-Null
 
 # ---------------------------------------------------------------------------
 # Eventos - Inicio
